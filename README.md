@@ -1,58 +1,67 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/pikaid/pikaid-specs/v1.0.4/logo.png" alt="pikaid" width="300" />
+  <a href="https://github.com/pikaid/pikaid-specs">
+    <img src="https://raw.githubusercontent.com/pikaid/pikaid-specs/v1.0.4/logo.png" alt="pikaid" width="300">
+  </a>
 </p>
 
 <p align="center">
   <strong>Small · Sortable · Secure ID generator</strong>
 </p>
 
-# pikaid — Official Rust Implementation
+<div align="center">
 
-**Status: v1.0.0 prepared, not yet published.** This repository tracks the
-stable 1.0.0 source line for pikaid specification revision 1.0.4. The crate is
-**not yet published to crates.io**, and no git tag has been created. See
-[Release status](#release-status).
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/language-Rust-DEA584.svg)](https://github.com/pikaid/pikaid-rust)
+[![CI](https://github.com/pikaid/pikaid-rust/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pikaid/pikaid-rust/actions/workflows/ci.yml)
+[![Official implementation](https://img.shields.io/badge/official-implementation-2e7d32.svg)](https://github.com/pikaid/pikaid-specs)
+[![Specification 1.0.4](https://img.shields.io/badge/spec-1.0.4-4b56a6.svg)](https://github.com/pikaid/pikaid-specs/tree/v1.0.4)
 
-The official Rust implementation of [pikaid](https://github.com/pikaid): a
-compact, chronologically sortable identifier with 96 bits of cryptographic
-randomness. Every identifier is exactly **26 lowercase Base36 characters** or
-**17 bytes** in binary, and the format is immutable and unversioned.
+</div>
 
-- **Specification:** [pikaid 1.0.4](https://github.com/pikaid/pikaid-specs/tree/v1.0.4)
-  (commit [`17014d7`](https://github.com/pikaid/pikaid-specs/commit/17014d76f568c3ac9f9ce2927c1a018fdbc36d1d))
-- **MSRV:** Rust 1.85 (edition 2024)
-- **License:** MIT
+**pikaid** is the **official Rust implementation** of a compact, chronologically sortable, collision-resistant identifier format for databases, APIs, and distributed systems.
 
-## Format
+This is the immutable, unversioned [pikaid format](https://github.com/pikaid/pikaid-specs/tree/v1.0.4), documented in specification revision **1.0.4**.
 
-```text
-0s44we8 002loz3po6mcf6vsn23
-└──┬──┘ └─────────┬────────┘
-7-char          19-char randomness
-timestamp       (96 bits, Base36)
-(Unix seconds)
+## ✨ Why pikaid?
+
+- **Short:** Compact, readable IDs for URLs, logs, and API resources.
+- **Sortable:** Lexicographically ordered by timestamp, with **one-second precision**.
+- **Collision-resistant:** 96 bits of cryptographic randomness make collisions extremely unlikely, never impossible.
+- **Storage-friendly:** Use `BINARY(17)` or readable `CHAR(26)`.
+- **Distributed-friendly:** No central sequence generator or coordination required.
+
+## 🧬 Identifier format
+
+A pikaid contains **26 lowercase Base36 characters**: a **7-character Unix-seconds timestamp** followed by **19 characters encoding 96 bits of cryptographic randomness**. Its binary form is **17 bytes**: 5 unsigned big-endian timestamp bytes followed by 12 randomness bytes.
+
+![Identifier structure](https://raw.githubusercontent.com/pikaid/pikaid-specs/v1.0.4/structure.svg)
+
+> **Ordering:** Different seconds sort chronologically. Within the same second, randomness—not issuance order—decides the order.
+
+> **Security:** These are identifiers, **not secrets**, session credentials, authentication tokens, or API keys.
+
+## ⚙️ Requirements
+
+Rust 1.85+ (edition 2024).
+
+## 📦 Installation
+
+The crate is not yet on crates.io. Make a Rust binary project and use the public Git dependency:
+
+```sh
+cargo new pikaid-demo
+cd pikaid-demo
 ```
 
-| Form   | Size | Layout                                              |
-| ------ | ---- | --------------------------------------------------- |
-| Text   | 26 B | 7 Base36 timestamp digits + 19 Base36 entropy digits |
-| Binary | 17 B | 5-byte unsigned timestamp (big-endian) + 12 entropy bytes |
-
-The timestamp range is `0..=78_364_164_095` (`36^7 - 1`, around the year 4453).
-Randomness is exactly 96 bits; a 19-digit Base36 suffix can encode more than
-that, so suffixes above `2^96 - 1` are rejected as invalid.
-
-## Usage
-
-The crate is not on crates.io yet. Use it from a checkout or a Git dependency:
+Add this under `[dependencies]` in `Cargo.toml`:
 
 ```toml
-[dependencies]
 pikaid = { git = "https://github.com/pikaid/pikaid-rust" }
 ```
 
-Once published, `cargo add pikaid` will work. The API below is the stable 1.0
-API:
+Save the code below as `src/main.rs`, then run `cargo run`.
+
+## 🚀 Basic Usage
 
 ```rust
 use pikaid::{PikaId, PikaIdBinary};
@@ -87,7 +96,18 @@ fn main() -> Result<(), pikaid::Error> {
 }
 ```
 
-## API overview
+## 💡 Example Use Case
+
+Use pikaid to identify **users, orders, invoices, uploads, events, and API resources**. Independent services can generate compact IDs without a shared counter, while timestamp-based ordering helps with indexing, sorting, and logs.
+
+## 📚 Canonical specification
+
+- [Canonical specification](https://github.com/pikaid/pikaid-specs)
+- [Revision 1.0.4](https://github.com/pikaid/pikaid-specs/tree/v1.0.4)
+
+Specification revisions describe the format; they do not change the encoded identifiers.
+
+## 🧩 API Reference
 
 | Operation                    | `PikaId`                        | `PikaIdBinary`                  |
 | ---------------------------- | ------------------------------- | ------------------------------- |
@@ -107,7 +127,7 @@ failure modes can be added without a breaking change.
 `PikaId::is_valid` performs full validation, including the 96-bit randomness
 bound. Use `is_valid` unless you specifically need the weaker check.
 
-## Security and ordering
+## 🔄 Order Guarantee
 
 - Randomness comes from the OS CSPRNG through [`getrandom`](https://crates.io/crates/getrandom).
   Generation **fails closed**: if the entropy source fails, an error is
@@ -122,7 +142,23 @@ bound. Use `is_valid` unless you specifically need the weaker check.
   precision and no sub-second component.
 - This crate is `std` only. `no_std` support is not implemented or tested.
 
-## Development
+## 🛢 Storage Recommendations
+
+| Representation | Size | Recommended for |
+| --- | ---: | --- |
+| **BINARY(17)** | 17 bytes | Compact primary keys and indexes |
+| **CHAR(26)** | 26 characters | Readable SQL, debugging, URLs, and logs |
+
+Use an **ASCII bytewise/binary collation** for text columns (for example, `ascii_bin` on MariaDB/MySQL). Case-insensitive or locale-aware sorting is not a substitute for canonical bytewise comparison.
+
+## ✅ Verification and release status
+
+The [CI workflow](https://github.com/pikaid/pikaid-rust/actions/workflows/ci.yml) runs native tests, pinned automated conformance checks, and language-specific quality gates. To run the native checks locally from a checkout, use `cargo test`.
+
+**Automated passing tests are not a security certification.** The independent CSPRNG source and failure-path audits (`P-GENERATE-RNG-SOURCE` and `P-GENERATE-RNG-FAILURE`) still require separate human evidence.
+
+<details>
+<summary>Platform, tooling, and conformance details</summary>
 
 ```sh
 cargo fmt --all --check
@@ -195,8 +231,6 @@ known answers, boundary and malformed-input cases, randomized round trips,
 ordering properties, and generation sanity checks. Expected values never come
 from round-tripping the implementation against itself.
 
-## Release status
-
 Version 1.0.0 is the first stable release of this crate and is prepared in the
 repository:
 
@@ -214,8 +248,6 @@ Until publication, depend on this repository directly as shown under
 [Usage](#usage). Nothing from this repository is distributed through any other
 registry.
 
-## Support and security-fix policy
-
 - **Tested toolchains.** Rust **1.85.0** is the minimum supported version and is
   tested on every CI run. Current stable Rust is tested on Linux, macOS and
   Windows; the MSRV is tested on Linux.
@@ -232,6 +264,35 @@ registry.
   security review has occurred. The official conformance suite's two manual
   CSPRNG audits remain outstanding until reviewed evidence is published.
 
-## License
+</details>
 
-[MIT](LICENSE) © 2026 larananas (Lara G.)
+Registry publication is not implied by a green CI: use the installation method documented above.
+
+## 🤝 Contributing
+
+Contributions are always welcome! 💙
+
+Whether you're fixing a typo, improving documentation, adding tests, or making pikaid even better, every contribution is appreciated.
+
+**Want to help? Here's how:**
+
+- 🐛 **Found a bug?** [Open an issue](https://github.com/pikaid/pikaid-rust/issues) with clear reproduction steps.
+- 💡 **Have an idea?** Start with an issue before making major changes.
+- 🛠️ **Ready to contribute?** Open a pull request explaining your changes.
+- 🧪 **Keep it tested.** Add meaningful regression tests for behavior changes and follow the existing conventions.
+- ✅ **Make sure CI passes.** All required checks must be green before a pull request is merged. No shortcuts!
+
+**One important rule:** pikaid's identifier format is immutable. Contributions must preserve the [canonical specification (revision 1.0.4)](https://github.com/pikaid/pikaid-specs/tree/v1.0.4).
+
+🔐 **Found a security vulnerability?** Report it privately using GitHub's security reporting (when available), or [contact the maintainer](mailto:larananas.dev@proton.me)—not through a public issue.
+
+**Every improvement matters, big or small. Thanks for helping make pikaid better!** 🐇
+
+## 📄 License
+
+The implementation is available under the [MIT License](LICENSE).
+
+## ✉️ Contact
+
+For licensing or project-related questions: [larananas.dev@proton.me](mailto:larananas.dev@proton.me).
+
