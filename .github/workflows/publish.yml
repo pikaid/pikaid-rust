@@ -1,0 +1,149 @@
+name: Publish to crates.io
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing stable GitHub release tag (for example, v1.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crates-io-publish
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release and CI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.validate.outputs.sha }}
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Validate stable release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Expected a stable SemVer tag such as v1.1.0."
+            exit 1
+          fi
+
+          published_tag="$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease \
+            --jq 'select(.isDraft == false and .isPrerelease == false) | .tagName')"
+
+          if [[ "$published_tag" != "$RELEASE_TAG" ]]; then
+            echo "::error::The tag must belong to an existing, published, stable GitHub release."
+            exit 1
+          fi
+
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: refs/tags/${{ steps.release.outputs.tag }}
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate version and successful CI for the exact commit
+        id: validate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          version="$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r '.packages[] | select(.name == "pikaid") | .version')"
+
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo "::error::Release tag $RELEASE_TAG does not match Cargo.toml version $version."
+            exit 1
+          fi
+
+          sha="$(git rev-parse HEAD)"
+          ci_conclusion="$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow ci.yml \
+            --event push \
+            --commit "$sha" \
+            --limit 30 \
+            --json headSha,status,conclusion,createdAt \
+            | jq -r --arg sha "$sha" \
+                '[.[] | select(.headSha == $sha)] | sort_by(.createdAt) | last | .conclusion // empty')"
+
+          if [[ "$ci_conclusion" != "success" ]]; then
+            echo "::error::The latest main-branch push CI for $sha must have succeeded (found: ${ci_conclusion:-none})."
+            exit 1
+          fi
+
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Validated $RELEASE_TAG at $sha; full CI passed."
+
+      - name: Verify distributable package
+        run: cargo package --locked
+
+  publish:
+    name: Publish verified crate
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the verified commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Authenticate with crates.io using OIDC
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked
+
+      - name: Confirm published version
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error \
+              "https://crates.io/api/v1/crates/pikaid/$VERSION" \
+              -o /dev/null 2>/dev/null; then
+              echo "pikaid $VERSION is available on crates.io."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Publish returned success, but crates.io has not exposed version $VERSION yet."
+          exit 1
