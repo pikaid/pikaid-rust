@@ -1,0 +1,8 @@
+# Conformance vectors are digest-pinned and embedded with `include_str!`, so
+# they must be byte-identical on every platform and every checkout.
+tests/vectors/** -text
+
+# Keep executable scripts and workflow definitions LF everywhere.
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf

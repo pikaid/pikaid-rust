@@ -1,0 +1,13 @@
+# Build output
+/target
+**/*.rs.bk
+
+# Coverage artifacts
+/lcov.info
+/coverage/
+
+# macOS
+.DS_Store
+
+# Local-only agent working directory (never commit)
+/.ai/

@@ -1,0 +1,39 @@
+[package]
+name = "pikaid"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Official Rust implementation of pikaid — 26-character sortable Base36 identifiers with 96-bit cryptographic randomness and 17-byte binary storage."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/pikaid/pikaid-rust"
+homepage = "https://github.com/pikaid"
+documentation = "https://docs.rs/pikaid"
+keywords = ["pikaid", "identifier", "sortable", "base36", "unique-id"]
+categories = ["database", "encoding"]
+include = [
+    "/src/**/*.rs",
+    "/tests/**/*.rs",
+    "/tests/vectors/**/*",
+    "/examples/**/*.rs",
+    "/Cargo.toml",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/README.md",
+]
+
+[dependencies]
+getrandom = "0.4"
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+
+[package.metadata.docs.rs]
+all-features = true

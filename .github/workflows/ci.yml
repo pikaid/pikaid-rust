@@ -1,0 +1,257 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A superseded pull request no longer needs to finish, but every push to main
+# keeps its own run so the gate always reports on the pushed commit.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.rust }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable]
+        include:
+          # Minimum supported Rust version, verified on Linux only to keep the
+          # matrix small; the code itself is platform-independent safe Rust.
+          - os: ubuntu-latest
+            rust: "1.85.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ matrix.rust }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build all targets
+        run: cargo build --all-targets --locked
+      - name: Run tests
+        # Includes tests/oracle.rs: digest-pinned independent oracle, the
+        # expanded negative corpus and every public entry point.
+        run: cargo test --all-targets --locked
+      - name: Run documentation tests
+        run: cargo test --doc --locked
+
+  oracle:
+    name: independent oracle (python + rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Recompute the oracle table from first principles
+        # Fails if tests/vectors/oracle-cases.json is stale or was hand-edited.
+        run: python3 scripts/generate_oracle_cases.py --check
+      - name: Pin the vector and oracle digests
+        run: |
+          echo "b0c9dfdd063613424414fef5c9065fbd2f81d645d0ab42b34e27cde715613500  tests/vectors/pikaid-v1.json" | sha256sum -c -
+          echo "4441d4dbaa6c5450ae9cbfb2438c53bc0421bba2b7fcc9ef9b158e5d1de0759e  tests/vectors/pikaid-v1.schema.json" | sha256sum -c -
+          echo "4acbeded373feb765572b5f5e6e4ff0238ff82eaaee5ad2fc9d1bddafd4021de  tests/vectors/oracle-cases.json" | sha256sum -c -
+      - name: Verify the vendored fixtures come from the pinned pikaid-php release
+        run: |
+          python3 - <<'PY'
+          import json
+          table = json.load(open("tests/vectors/oracle-cases.json", encoding="utf-8"))
+          meta = table["meta"]
+          assert meta["spec_revision"] == "1.0.4"
+          assert meta["spec_commit"] == "17014d76f568c3ac9f9ce2927c1a018fdbc36d1d"
+          assert meta["official_fixture_commit"] == "e3f843edeb5157a5d2d25196cac0d69580810a95"
+          assert len(table["valid"]) >= 330
+          assert len(table["invalid"]["string"]) >= 20
+          assert len(table["invalid"]["binary"]) >= 8
+          print(f"{len(table['valid'])} valid, "
+                f"{len(table['invalid']['string'])} invalid strings, "
+                f"{len(table['invalid']['binary'])} invalid binaries")
+          PY
+      - name: Run the oracle suite
+        run: cargo test --locked --test oracle
+
+  package:
+    name: packaged artifact and external consumer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the archive
+        run: cargo package --locked
+      - name: Verify archive contents
+        run: |
+          cargo package --list --locked > package-list.txt
+          cat package-list.txt
+          if grep -qE '(^|/)\.ai/' package-list.txt; then
+            echo "::error::package archive contains .ai/ entries"
+            grep -E '(^|/)\.ai/' package-list.txt
+            exit 1
+          fi
+          for forbidden in '^scripts/' '^ci/' '^\.github/'; do
+            if grep -qE "$forbidden" package-list.txt; then
+              echo "::error::package archive contains repository-only path $forbidden"
+              grep -E "$forbidden" package-list.txt
+              exit 1
+            fi
+          done
+          for required in \
+            Cargo.toml \
+            Cargo.lock \
+            LICENSE \
+            README.md \
+            CHANGELOG.md \
+            src/lib.rs \
+            src/id.rs \
+            src/binary.rs \
+            src/base36.rs \
+            src/error.rs \
+            tests/boundaries.rs \
+            tests/conformance.rs \
+            tests/generation.rs \
+            tests/oracle.rs \
+            tests/properties.rs \
+            tests/vectors/pikaid-v1.json \
+            tests/vectors/pikaid-v1.schema.json \
+            tests/vectors/oracle-cases.json \
+            examples/basic.rs; do
+            if ! grep -qx "$required" package-list.txt; then
+              echo "::error::package archive is missing $required"
+              exit 1
+            fi
+          done
+          echo "Package contents verified: $(wc -l < package-list.txt) files."
+      - name: Run the packaged crate's own test suite
+        # The extracted archive is a standalone crate: its tests must pass using
+        # only the files that would actually be published.
+        run: |
+          version=$(cargo pkgid | sed 's/.*@//')
+          cargo test --manifest-path "target/package/pikaid-$version/Cargo.toml" --all-targets --locked
+      - name: Build an external consumer against the archive
+        run: sh ci/consumer/run.sh
+      - name: Verify the archive is byte-reproducible
+        run: |
+          version=$(cargo pkgid | sed 's/.*@//')
+          first=$(sha256sum "target/package/pikaid-$version.crate")
+          cargo package --locked >/dev/null
+          second=$(sha256sum "target/package/pikaid-$version.crate")
+          echo "first:  $first"
+          echo "second: $second"
+          if [ "$first" != "$second" ]; then
+            echo "::error::packaging is not reproducible"
+            exit 1
+          fi
+
+  lint:
+    name: fmt, clippy, docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify .ai is never tracked or committed
+        run: |
+          if git ls-files -- .ai | grep -q .; then
+            echo "::error::.ai/ files must not be tracked"
+            git ls-files -- .ai
+            exit 1
+          fi
+          if ! grep -qx '/\.ai/' .gitignore; then
+            echo "::error::.gitignore must contain the explicit /.ai/ rule"
+            exit 1
+          fi
+          rule=$(git check-ignore -v .ai/reports/probe.md | cut -f1)
+          case "$rule" in
+            *:/.ai/) echo "ignored by explicit rule: $rule" ;;
+            *)
+              echo "::error::.ai/ is not ignored by the explicit /.ai/ rule (got: $rule)"
+              exit 1
+              ;;
+          esac
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - name: Build documentation (deny warnings)
+        run: cargo doc --no-deps --all-features --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Run the documented example
+        run: cargo run --example basic --locked
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Measure line coverage (minimum 98%)
+        # Measured on 2026-11-09: 98.9% lines. The gate sits just below that so
+        # an untested regression fails while ordinary refactors do not.
+        run: cargo llvm-cov --all-targets --locked --summary-only --fail-under-lines 98
+
+  official-conformance:
+    name: official conformance suite (pinned 1.0.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Fetch the pinned official suite
+        env:
+          SUITE_SHA: 059780cc0e5b113443812720d95c630649bf3aa3
+        run: |
+          git clone --quiet https://github.com/pikaid/pikaid-specs.git "$RUNNER_TEMP/pikaid-specs"
+          git -C "$RUNNER_TEMP/pikaid-specs" -c core.autocrlf=false checkout --quiet --force "$SUITE_SHA"
+          test "$(git -C "$RUNNER_TEMP/pikaid-specs" rev-parse HEAD)" = "$SUITE_SHA"
+      - name: Verify fixtures and run the official automated suite
+        # ci/official/run.sh verifies SHA256SUMS, the manifest/schema/semantic
+        # checks, the suite's own self-tests and the Node.js BigInt oracle, then
+        # drives this crate through the test-only JSON-Lines bridge. Exit 0 is
+        # required; the additional default-mode run must exit 3, proving that
+        # missing manual security evidence is never reported as a pass.
+        run: |
+          ci/official/run.sh \
+            --suite "$RUNNER_TEMP/pikaid-specs" \
+            --report official-conformance-report.json
+      - name: Prove the runner rejects deliberate defects
+        # Negative controls: permissive decoder, wrong encoder alphabet and a
+        # doctored bridge must each make the official runner exit 1.
+        run: ci/official/mutation_controls.sh --suite "$RUNNER_TEMP/pikaid-specs"
+      - name: Upload official conformance reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-conformance-report
+          path: |
+            official-conformance-report.json
+            target/mutation-controls/run-*/report.json
+          if-no-files-found: warn
+          retention-days: 30

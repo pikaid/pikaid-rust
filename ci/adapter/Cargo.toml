@@ -1,0 +1,19 @@
+[package]
+name = "pikaid-conformance-adapter"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+description = "Test-only JSON-Lines bridge between the official PikaID conformance runner and the pikaid crate"
+license = "MIT"
+
+[[bin]]
+name = "pikaid-jsonl-adapter"
+path = "src/main.rs"
+
+[dependencies]
+# The adapter exists to exercise the real public library, never a copy of it.
+pikaid = { path = "../.." }
+serde_json = "1"
+
+[workspace]
